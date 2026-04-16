@@ -62,13 +62,12 @@ void IDmaBeTcdm::activate_burst()
 
 
 
-void IDmaBeTcdm::enqueue_burst(uint64_t base, uint64_t size, bool is_write, IdmaTransfer *transfer)
+void IDmaBeTcdm::enqueue_burst(uint64_t base, uint64_t size, bool is_write)
 {
     // Just enqueue the burst and trigger the FSM, the FSM will take care of sending the requests
     this->burst_queue_base.push(base);
     this->burst_queue_size.push(size);
     this->burst_queue_is_write.push(is_write);
-    this->burst_queue_transfer.push(transfer);
 
     // We may need to activate the first burst
     this->activate_burst();
@@ -80,17 +79,17 @@ void IDmaBeTcdm::enqueue_burst(uint64_t base, uint64_t size, bool is_write, Idma
 
 
 // Called by the backend to enqueue a read burst
-void IDmaBeTcdm::read_burst(IdmaTransfer *transfer, uint64_t base, uint64_t size)
+void IDmaBeTcdm::read_burst(uint64_t base, uint64_t size)
 {
-    this->enqueue_burst(base, size, false, transfer);
+    this->enqueue_burst(base, size, false);
 }
 
 
 
 // Called by the backend to enqueue a write burst
-void IDmaBeTcdm::write_burst(IdmaTransfer *transfer, uint64_t base, uint64_t size)
+void IDmaBeTcdm::write_burst(uint64_t base, uint64_t size)
 {
-    this->enqueue_burst(base, size, true, transfer);
+    this->enqueue_burst(base, size, true);
 }
 
 
@@ -117,7 +116,7 @@ bool IDmaBeTcdm::can_accept_data()
 
 
 // Called by backend to push data for the current burst
-void IDmaBeTcdm::write_data(IdmaTransfer *transfer, uint8_t *data, uint64_t size)
+void IDmaBeTcdm::write_data(uint8_t *data, uint64_t size)
 {
     this->trace.msg(vp::Trace::LEVEL_TRACE, "Writing data (size: 0x%lx)\n", size);
 
@@ -128,7 +127,6 @@ void IDmaBeTcdm::write_data(IdmaTransfer *transfer, uint8_t *data, uint64_t size
     this->write_current_chunk_base = this->current_burst_base;
     this->write_current_chunk_data = data;
     this->write_current_chunk_data_start = data;
-    this->write_current_transfer = transfer;
 
     // Send a line now, the rest will be handled by the FSM
     this->write_line();
@@ -222,11 +220,9 @@ void IDmaBeTcdm::write_handle_req_ack()
 {
     if (this->write_current_chunk_size == 0)
     {
-        this->trace.msg(vp::Trace::LEVEL_TRACE, "Finished TCDM line, notifying middle-end\n");
-
         this->be->update();
         // If the chunk is done, acknowledge it
-        this->be->ack_data(this->write_current_transfer, this->write_current_chunk_data_start, this->write_current_chunk_ack_size);
+        this->be->ack_data(this->write_current_chunk_data_start, this->write_current_chunk_ack_size);
     }
     else
     {
@@ -266,7 +262,6 @@ void IDmaBeTcdm::remove_chunk_from_current_burst(uint64_t size)
         this->burst_queue_base.pop();
         this->burst_queue_size.pop();
         this->burst_queue_is_write.pop();
-        this->burst_queue_transfer.pop();
 
         // And take the next one
         this->activate_burst();
@@ -286,7 +281,7 @@ void IDmaBeTcdm::read_line()
     uint64_t size = this->get_line_size(base, this->current_burst_size);
 
     this->trace.msg(vp::Trace::LEVEL_TRACE, "Reading line from TCDM (base: 0x%lx, size: 0x%lx)\n",
-            base, size);
+        base, size);
 
     // Prepare the IO request to TCDM
     req->prepare();
@@ -312,12 +307,11 @@ void IDmaBeTcdm::read_line()
         trace.fatal("Asynchronous response is not supported on TCDM backend\n");
     }
 
-    if (req->get_latency() == 0 && this->be->is_ready_to_accept_data(this->burst_queue_transfer.front()))
+    if (req->get_latency() == 0 && this->be->is_ready_to_accept_data())
     {
         // If there is no latency and backend is ready, we can immediately push the data
-        IdmaTransfer *transfer = this->burst_queue_transfer.front();
         this->remove_chunk_from_current_burst(size);
-        this->be->write_data(transfer, req->get_data(), size);
+        this->be->write_data(req->get_data(), size);
     }
     else
     {
@@ -381,16 +375,15 @@ void IDmaBeTcdm::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
 
         // If a read line is stuck because backend was not ready to receive it,
         // check if it is now ready
-        if (_this->read_pending_line_size > 0 && _this->be->is_ready_to_accept_data(_this->burst_queue_transfer.front()))
+        if (_this->read_pending_line_size > 0 && _this->be->is_ready_to_accept_data())
         {
             // Maybe it was actually stuck due to latency
             if (_this->read_pending_timestamp <= _this->clock.get_cycles())
             {
                 uint64_t size = _this->read_pending_line_size;
                 _this->read_pending_line_size = 0;
-                IdmaTransfer *transfer = _this->burst_queue_transfer.front();
                 _this->remove_chunk_from_current_burst(size);
-                _this->be->write_data(transfer, _this->read_pending_line_data, size);
+                _this->be->write_data(_this->read_pending_line_data, size);
             }
             else
             {

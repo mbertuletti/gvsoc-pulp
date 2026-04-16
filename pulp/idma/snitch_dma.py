@@ -43,7 +43,6 @@ class SnitchDma(gvsoc.systree.Component):
     def __init__(self, parent: gvsoc.systree.Component, name: str,
             transfer_queue_size: int=8,
             burst_queue_size: int=8,
-            burst_size: int=0,
             loc_base: int=0,
             loc_size: int=0,
             tcdm_width: int=0):
@@ -62,7 +61,6 @@ class SnitchDma(gvsoc.systree.Component):
         self.add_properties({
             "transfer_queue_size": transfer_queue_size,
             "burst_queue_size": burst_queue_size,
-            "burst_size" : burst_size,
             "loc_base": loc_base,
             "loc_size": loc_size,
             "tcdm_width": tcdm_width,
