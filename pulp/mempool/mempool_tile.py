@@ -31,7 +31,7 @@ from pulp.mempool.redmule_configurations import RedmuleParam
 
 class Tile(st.Component):
 
-    def __init__(self, parent, name, parser, redmule_config: RedmuleParam=None, has_redmule: bool=False, terapool: bool=False, async_l1_interco: bool=False, tile_id: int=0, sub_group_id: int=0, group_id: int=0, nb_cores_per_tile: int=4, nb_sub_groups_per_group: int=1, nb_groups: int=4, total_cores: int= 256, bank_factor: int=4, axi_data_width: int=64):
+    def __init__(self, parent, name, parser, redmule_config: RedmuleParam=None, has_redmule: bool=False, terapool: bool=False, async_l1_interco: bool=False, tile_id: int=0, sub_group_id: int=0, group_id: int=0, nb_cores_per_tile: int=4, nb_sub_groups_per_group: int=1, nb_groups: int=4, total_cores: int= 256, bank_factor: int=4, bank_size: int=1024, axi_data_width: int=64):
         super().__init__(parent, name)
 
     #add new parameter has_redmule: bool=false
@@ -67,7 +67,7 @@ class Tile(st.Component):
         # global_tile_id = tile_id + group_id * nb_tiles_per_group
         Xfrep = 0
         # stack_size_per_tile = 0x800
-        mem_size = nb_cores_per_tile * bank_factor * 1024
+        mem_size = nb_cores_per_tile * bank_factor * bank_size
 
         # Snitch core complex
         self.int_cores = []
@@ -134,7 +134,7 @@ class Tile(st.Component):
 
         # ICO --> L1 TCDM
         for i in range(0, nb_cores_per_tile):
-            ico_list[i].add_mapping('l1', base=0x00000000, remove_offset=0x00000000, size=total_cores * bank_factor * 1024)
+            ico_list[i].add_mapping('l1', base=0x00000000, remove_offset=0x00000000, size=total_cores * bank_factor * bank_size)
             self.bind(ico_list[i], 'l1', l1, f'pe_in{i}')
 
         # Core 0 --> Redmule

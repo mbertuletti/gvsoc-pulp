@@ -29,7 +29,7 @@ from pulp.mempool.redmule_configurations import RedmuleParam
 
 class Group(st.Component):
 
-    def __init__(self, parent, name, parser, redmule_config: RedmuleParam=None, tensorpool: bool=False, terapool: bool=False, nb_redmule_tiles_per_group: int=0, async_l1_interco: bool=False, group_id: int=0, nb_cores_per_tile: int=4, nb_sub_groups_per_group: int=1, nb_groups: int=4, total_cores: int= 256, bank_factor: int=4, axi_data_width: int=64):
+    def __init__(self, parent, name, parser, redmule_config: RedmuleParam=None, tensorpool: bool=False, terapool: bool=False, nb_redmule_tiles_per_group: int=0, async_l1_interco: bool=False, group_id: int=0, nb_cores_per_tile: int=4, nb_sub_groups_per_group: int=1, nb_groups: int=4, total_cores: int= 256, bank_factor: int=4, bank_size: int=1024, axi_data_width: int=64):
         super().__init__(parent, name)
 
         ################################################################
@@ -57,13 +57,13 @@ class Group(st.Component):
             self.sub_group_list = []
             for i in range(0, nb_sub_groups_per_group):
                 self.sub_group_list.append(Sub_group(self, f'sub_group_{i}', parser=parser, redmule_config=redmule_config, terapool=terapool, nb_redmule_tiles_per_sub_group=nb_redmule_tiles_per_sub_group, async_l1_interco=async_l1_interco, sub_group_id=i, group_id=group_id, nb_cores_per_tile=nb_cores_per_tile,
-                    nb_sub_groups_per_group=nb_sub_groups_per_group, nb_groups=nb_groups, total_cores=total_cores, bank_factor=bank_factor, axi_data_width=axi_data_width))
+                    nb_sub_groups_per_group=nb_sub_groups_per_group, nb_groups=nb_groups, total_cores=total_cores, bank_factor=bank_factor, bank_size=bank_size, axi_data_width=axi_data_width))
         else:
             # Tiles
             self.tile_list = []
             for i in range(0, nb_tiles_per_group):
                 self.tile_list.append(Tile(self, f'tile_{i}', parser=parser, redmule_config=redmule_config, terapool=terapool, has_redmule=(i< nb_redmule_tiles_per_group), async_l1_interco=async_l1_interco, tile_id=i, sub_group_id=0, group_id=group_id, nb_cores_per_tile=nb_cores_per_tile,
-                    nb_sub_groups_per_group=1, nb_groups=nb_groups, total_cores=total_cores, bank_factor=bank_factor, axi_data_width=axi_data_width))
+                    nb_sub_groups_per_group=1, nb_groups=nb_groups, total_cores=total_cores, bank_factor=bank_factor, bank_size=bank_size, axi_data_width=axi_data_width))
 
         # TCDM Interconnect
         if (nb_sub_groups_per_group > 1):
