@@ -36,7 +36,7 @@ class LightRedmule(gvsoc.systree.Component):
 
         super().__init__(parent, name)
 
-        self.add_sources(['pulp/light_redmule/light_redmule.cpp'])
+        self.add_sources(['pulp/light_redmule/light_redmule.cpp', 'cpu/iss/flexfloat/flexfloat.c'])
 
         self.add_properties({
             'tcdm_bank_width'   : tcdm_bank_width,
