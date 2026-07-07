@@ -31,8 +31,9 @@ class LightRedmule(gvsoc.systree.Component):
                 ce_width: int,
                 ce_pipe: int,
                 queue_depth: int=128,
-                ic_latency: int=0,    # modeled interconnect round-trip (cycles)
                 fold_tiles_mapping: int=0,
+                stream_loads: bool=False, # model load streaming across tile-iterations (timing only)
+                row_refill_cyc: int=0,    # streaming: fixed per-M-block (output-row) refill/priming overhead (calibration knob; 0 = off)
                 loc_base=0): #here we might add also local size to check that tcdm requests do not overflow...
 
         super().__init__(parent, name)
@@ -50,8 +51,9 @@ class LightRedmule(gvsoc.systree.Component):
             'ce_width'          : ce_height,
             'ce_pipe'           : ce_pipe,
             'queue_depth'       : queue_depth,
-            'ic_latency'       : ic_latency,
             'fold_tiles_mapping': fold_tiles_mapping,
+            'stream_loads'      : int(stream_loads),
+            'row_refill_cyc'    : row_refill_cyc,
             'loc_base'          : loc_base,
         })
     def i_INPUT(self) -> gvsoc.systree.SlaveItf:
