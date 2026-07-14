@@ -44,6 +44,14 @@ IDmaBeTcdm::IDmaBeTcdm(vp::Component *idma, std::string itf_name, IdmaBeProducer
     // Max number of pending bursts
     this->burst_queue_maxsize = idma->get_js_config()->get_int("burst_queue_size");
 
+    // A component which does not declare the property gets 0, keep at least one request
+    this->tcdm_outstanding = idma->get_js_config()->get_int("tcdm_outstanding");
+    if (this->tcdm_outstanding <= 0)
+    {
+        this->tcdm_outstanding = 1;
+    }
+    this->read_reqs.resize(this->tcdm_outstanding);
+
     // Local memory base
     this->loc_base = idma->get_js_config()->get_int("loc_base");
 }
@@ -52,7 +60,8 @@ IDmaBeTcdm::IDmaBeTcdm(vp::Component *idma, std::string itf_name, IdmaBeProducer
 
 void IDmaBeTcdm::activate_burst()
 {
-    // If queue is not empty and we don't have any active burst, activate it
+    // Delivery side: it tracks the burst whose lines are coming back, always the front one.
+    // The issue side runs ahead of it, see advance_read_issue.
     if (this->current_burst_size == 0 && this->burst_queue_size.size() > 0)
     {
         this->current_burst_base = this->burst_queue_base.front();
@@ -62,12 +71,31 @@ void IDmaBeTcdm::activate_burst()
 
 
 
-void IDmaBeTcdm::enqueue_burst(uint64_t base, uint64_t size, bool is_write)
+void IDmaBeTcdm::advance_read_issue()
+{
+    // Once a burst has been fully sent, roll on to the next one without waiting for it to come
+    // back, otherwise the pipeline drains at every burst boundary. read_issue_idx is relative to
+    // the front of the queue, so it shifts down whenever the front burst is retired.
+    if (this->read_issue_size == 0
+        && this->read_issue_idx < this->burst_queue_base.size()
+        && !this->burst_queue_is_write[this->read_issue_idx])
+    {
+        this->read_issue_base = this->burst_queue_base[this->read_issue_idx];
+        this->read_issue_size = this->burst_queue_size[this->read_issue_idx];
+        this->read_issue_transfer = this->burst_queue_transfer[this->read_issue_idx];
+        this->read_issue_idx++;
+    }
+}
+
+
+
+void IDmaBeTcdm::enqueue_burst(uint64_t base, uint64_t size, bool is_write, IdmaTransfer *transfer)
 {
     // Just enqueue the burst and trigger the FSM, the FSM will take care of sending the requests
-    this->burst_queue_base.push(base);
-    this->burst_queue_size.push(size);
-    this->burst_queue_is_write.push(is_write);
+    this->burst_queue_base.push_back(base);
+    this->burst_queue_size.push_back(size);
+    this->burst_queue_is_write.push_back(is_write);
+    this->burst_queue_transfer.push_back(transfer);
 
     // We may need to activate the first burst
     this->activate_burst();
@@ -79,17 +107,17 @@ void IDmaBeTcdm::enqueue_burst(uint64_t base, uint64_t size, bool is_write)
 
 
 // Called by the backend to enqueue a read burst
-void IDmaBeTcdm::read_burst(uint64_t base, uint64_t size)
+void IDmaBeTcdm::read_burst(IdmaTransfer *transfer, uint64_t base, uint64_t size)
 {
-    this->enqueue_burst(base, size, false);
+    this->enqueue_burst(base, size, false, transfer);
 }
 
 
 
 // Called by the backend to enqueue a write burst
-void IDmaBeTcdm::write_burst(uint64_t base, uint64_t size)
+void IDmaBeTcdm::write_burst(IdmaTransfer *transfer, uint64_t base, uint64_t size)
 {
-    this->enqueue_burst(base, size, true);
+    this->enqueue_burst(base, size, true, transfer);
 }
 
 
@@ -104,32 +132,43 @@ uint64_t IDmaBeTcdm::get_burst_size(uint64_t base, uint64_t size)
 bool IDmaBeTcdm::can_accept_burst()
 {
     // Accept a burst if we have room in the queue of pending bursts
-    return this->burst_queue_base.size() < this->burst_queue_maxsize;
+    return (int)this->burst_queue_base.size() < this->burst_queue_maxsize;
 }
 
 bool IDmaBeTcdm::can_accept_data()
 {
-    // Accept data if we don't have already a chunk of data being written
-    return this->write_current_chunk_size == 0 && this->write_ack_timestamp == -1;
+    // Take several chunks at once, so that the source back-end can keep its own requests in
+    // flight instead of waiting for each chunk to land in the memory
+    return this->write_chunks.size() < (uint32_t)this->tcdm_outstanding;
 }
 
 
 
 // Called by backend to push data for the current burst
-void IDmaBeTcdm::write_data(uint8_t *data, uint64_t size)
+void IDmaBeTcdm::write_data(IdmaTransfer *transfer, uint8_t *data, uint64_t size)
 {
     this->trace.msg(vp::Trace::LEVEL_TRACE, "Writing data (size: 0x%lx)\n", size);
 
-    // Since the data may be bigger than a line, first enqueue the whole data and process it
-    // line by line
-    this->write_current_chunk_ack_size = size;
-    this->write_current_chunk_size = size;
-    this->write_current_chunk_base = this->current_burst_base;
-    this->write_current_chunk_data = data;
-    this->write_current_chunk_data_start = data;
+    // Allocate the destination address of this chunk now. The allocation cursor is independent
+    // from the retire cursor, so a chunk of the next burst can be taken while the current burst
+    // is still in flight.
+    if (this->write_alloc_remaining == 0)
+    {
+        this->write_alloc_base = this->burst_queue_base[this->write_alloc_burst];
+        this->write_alloc_remaining = this->burst_queue_size[this->write_alloc_burst];
+    }
 
-    // Send a line now, the rest will be handled by the FSM
-    this->write_line();
+    this->write_chunks.push_back({transfer, data, size, this->write_alloc_base, 0, 0});
+
+    this->write_alloc_base += size;
+    this->write_alloc_remaining -= size;
+    if (this->write_alloc_remaining == 0)
+    {
+        this->write_alloc_burst++;
+    }
+
+    // The FSM will take care of splitting the chunk into lines
+    this->fsm_event.enqueue();
 }
 
 
@@ -139,10 +178,33 @@ void IDmaBeTcdm::reset(bool active)
     if (active)
     {
         this->current_burst_size = 0;
-        this->read_pending_line_size = 0;
 
-        this->write_current_chunk_size = 0;
-        this->write_ack_timestamp = -1;
+        this->read_issue_base = 0;
+        this->read_issue_size = 0;
+        this->read_issue_transfer = NULL;
+        this->read_issue_idx = 0;
+        while (this->read_inflight.size() > 0)
+        {
+            this->read_inflight.pop();
+        }
+        while (this->free_read_reqs.size() > 0)
+        {
+            this->free_read_reqs.pop();
+        }
+        for (int i = 0; i < this->tcdm_outstanding; i++)
+        {
+            this->free_read_reqs.push(i);
+        }
+
+        this->write_chunks.clear();
+        this->write_issue_chunk = 0;
+        this->write_alloc_base = 0;
+        this->write_alloc_remaining = 0;
+        this->write_alloc_burst = 0;
+        while (this->write_inflight.size() > 0)
+        {
+            this->write_inflight.pop();
+        }
 
         this->last_line_timestamp = -1;
     }
@@ -152,83 +214,52 @@ void IDmaBeTcdm::reset(bool active)
 
 void IDmaBeTcdm::write_line()
 {
-    // Only send the line if no line was already sent in this cycle. Since we try to send a line as
-    // soon as we receive a request, this may happen
-    if (this->last_line_timestamp == -1 || this->last_line_timestamp < this->clock.get_cycles())
+    WriteChunk &chunk = this->write_chunks[this->write_issue_chunk];
+
+    // Extract one line from the chunk being issued
+    uint64_t base = chunk.base + chunk.issued;
+    uint64_t size = this->get_line_size(base, chunk.size - chunk.issued);
+
+    this->trace.msg(vp::Trace::LEVEL_TRACE, "Writing line to TCDM (base: 0x%lx, size: 0x%lx)\n",
+        base, size);
+
+    // Prepare the line request
+    vp::IoReq *req = &this->req;
+
+    req->prepare();
+    req->set_is_write(true);
+    req->set_addr(base - this->loc_base);
+    req->set_size(size);
+    // The data belongs to the source back-end, it stays valid until we acknowledge the chunk
+    req->set_data(chunk.data + chunk.issued);
+
+    // Move the issue position on straight away, so that the next line can be sent while this
+    // one is still in flight
+    chunk.issued += size;
+    if (chunk.issued == chunk.size)
     {
-        this->last_line_timestamp = this->clock.get_cycles();
+        this->write_issue_chunk++;
+    }
 
-        // Extract one line from current data chunk
-        uint64_t base = this->write_current_chunk_base;
-        uint64_t size = this->get_line_size(this->write_current_chunk_base, this->write_current_chunk_size);
-
-        this->trace.msg(vp::Trace::LEVEL_TRACE, "Writing line to TCDM (base: 0x%lx, size: 0x%lx)\n",
+    // Send request to TCDM
+    vp::IoReqStatus status = this->ico_itf.req(req);
+    if (status == vp::IoReqStatus::IO_REQ_INVALID)
+    {
+        trace.force_warning("Invalid access during TCDM write line (base: 0x%lx, size: 0x%lx)\n",
             base, size);
-
-        // Prepare the line request
-        vp::IoReq *req = &this->req;
-
-        req->prepare();
-        req->set_is_write(true);
-        req->set_addr(base - this->loc_base);
-        req->set_size(size);
-        req->set_data(this->write_current_chunk_data);
-
-        // Update chunk info for next line
-        this->write_current_chunk_base += size;
-        this->write_current_chunk_size -= size;
-        this->write_current_chunk_data += size;
-
-        // Send request to TCDM
-        vp::IoReqStatus status = this->ico_itf.req(req);
-        if (status == vp::IoReqStatus::IO_REQ_INVALID)
-        {
-            trace.force_warning("Invalid access during TCDM write line (base: 0x%lx, size: 0x%lx)\n",
-                base, size);
-        }
-        else if (status != vp::IoReqStatus::IO_REQ_OK)
-        {
-            // For now aynchronous replies are not supported since dma is always passing.
-            // This could be needed if we want to model a more dynamic priority
-            trace.fatal("Asynchronous response is not supported on TCDM backend\n");
-        }
-
-        if (req->get_latency() == 0)
-        {
-            // If the response has no latency, handle it now so that we can immediately continue
-            // with the next line
-            this->remove_chunk_from_current_burst(size);
-            this->write_handle_req_ack();
-        }
-        else
-        {
-            // Otherwise enqueue it with timestamp so that we acknowledge it at correct time
-            this->write_ack_timestamp = this->clock.get_cycles() + req->get_latency();
-            this->write_ack_size = size;
-            this->fsm_event.enqueue(req->get_latency());
-        }
     }
-    else
+    else if (status != vp::IoReqStatus::IO_REQ_OK)
     {
-        this->update();
+        // For now aynchronous replies are not supported since dma is always passing.
+        // This could be needed if we want to model a more dynamic priority
+        trace.fatal("Asynchronous response is not supported on TCDM backend\n");
     }
-}
 
+    // The reply is synchronous, so we already know when the line will have landed
+    int64_t latency = (int64_t)req->get_latency();
+    this->write_inflight.push({size, (int64_t)this->clock.get_cycles() + latency});
 
-
-void IDmaBeTcdm::write_handle_req_ack()
-{
-    if (this->write_current_chunk_size == 0)
-    {
-        this->be->update();
-        // If the chunk is done, acknowledge it
-        this->be->ack_data(this->write_current_chunk_data_start, this->write_current_chunk_ack_size);
-    }
-    else
-    {
-        // Otherwise, the FSM will take care of the next line
-        this->fsm_event.enqueue();
-    }
+    this->fsm_event.enqueue(std::max((int64_t)1, latency));
 }
 
 
@@ -259,9 +290,21 @@ void IDmaBeTcdm::remove_chunk_from_current_burst(uint64_t size)
     if (this->current_burst_size == 0)
     {
         // In case it is the last chunk, remove the current burst
-        this->burst_queue_base.pop();
-        this->burst_queue_size.pop();
-        this->burst_queue_is_write.pop();
+        this->burst_queue_base.pop_front();
+        this->burst_queue_size.pop_front();
+        this->burst_queue_is_write.pop_front();
+        this->burst_queue_transfer.pop_front();
+
+        // The issue and allocation cursors are relative to the front of the queue, so they
+        // shift down with it
+        if (this->read_issue_idx > 0)
+        {
+            this->read_issue_idx--;
+        }
+        if (this->write_alloc_burst > 0)
+        {
+            this->write_alloc_burst--;
+        }
 
         // And take the next one
         this->activate_burst();
@@ -274,11 +317,15 @@ void IDmaBeTcdm::remove_chunk_from_current_burst(uint64_t size)
 
 void IDmaBeTcdm::read_line()
 {
-    vp::IoReq *req = &this->req;
+    // Take a free request from the pool. The caller checked that one is available.
+    int req_id = this->free_read_reqs.front();
+    this->free_read_reqs.pop();
+    vp::IoReq *req = &this->read_reqs[req_id];
 
-    // Extract line from current read burst
-    uint64_t base = this->current_burst_base;
-    uint64_t size = this->get_line_size(base, this->current_burst_size);
+    // Extract the line from the position we have reached in the issue of the current burst
+    uint64_t base = this->read_issue_base;
+    uint64_t size = this->get_line_size(base, this->read_issue_size);
+    IdmaTransfer *transfer = this->read_issue_transfer;
 
     this->trace.msg(vp::Trace::LEVEL_TRACE, "Reading line from TCDM (base: 0x%lx, size: 0x%lx)\n",
         base, size);
@@ -288,16 +335,15 @@ void IDmaBeTcdm::read_line()
     req->set_is_write(false);
     req->set_addr(base - this->loc_base);
     req->set_size(size);
-    // Since the destination backend may keep the data until the write is done, we need
-    // to dynamically allocate the data since we may read several times before data is acknowledged
-    // We will free it when we receive the ack
+    // Several lines can be in flight and the destination keeps the data until the write is
+    // done, so each line owns its buffer. Freed when the ack is received.
     req->set_data(new uint8_t[size]);
 
     // Send to TCDM
     vp::IoReqStatus status = this->ico_itf.req(req);
     if (status == vp::IoReqStatus::IO_REQ_INVALID)
     {
-        trace.force_warning("Invalid access during TCDM write line (base: 0x%lx, size: 0x%lx)\n",
+        trace.force_warning("Invalid access during TCDM read line (base: 0x%lx, size: 0x%lx)\n",
             base, size);
     }
     else if (status != vp::IoReqStatus::IO_REQ_OK)
@@ -307,20 +353,17 @@ void IDmaBeTcdm::read_line()
         trace.fatal("Asynchronous response is not supported on TCDM backend\n");
     }
 
-    if (req->get_latency() == 0 && this->be->is_ready_to_accept_data())
-    {
-        // If there is no latency and backend is ready, we can immediately push the data
-        this->remove_chunk_from_current_burst(size);
-        this->be->write_data(req->get_data(), size);
-    }
-    else
-    {
-        // Otherwise we have to put it on hold since we can only have one request pending
-        this->read_pending_timestamp = this->clock.get_cycles() + req->get_latency();
-        this->read_pending_line_data = req->get_data();
-        this->read_pending_line_size = size;
-        this->fsm_event.enqueue(req->get_latency());
-    }
+    // Move the issue position on straight away, so that the next line can be sent while this
+    // one is still in flight
+    this->read_issue_base += size;
+    this->read_issue_size -= size;
+
+    // The reply is synchronous, so we already know when the data can be handed over
+    int64_t latency = (int64_t)req->get_latency();
+    this->read_inflight.push({req_id, req->get_data(), size, transfer,
+        (int64_t)this->clock.get_cycles() + latency});
+
+    this->fsm_event.enqueue(std::max((int64_t)1, latency));
 }
 
 
@@ -341,54 +384,102 @@ void IDmaBeTcdm::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
 {
     IDmaBeTcdm *_this = (IDmaBeTcdm *)__this;
 
-    // Check if we should acknowledge the previous line, this can happen when the write request
-    // got a latency
-    if (_this->write_ack_timestamp != -1)
+    // Retire the write lines which have landed, in issue order, so that the chunks are
+    // acknowledged in order, as the source back-end expects
+    while (_this->write_inflight.size() > 0
+        && _this->write_inflight.front().ready_timestamp <= _this->clock.get_cycles())
     {
-        if (_this->write_ack_timestamp <= _this->clock.get_cycles())
+        uint64_t size = _this->write_inflight.front().size;
+        _this->write_inflight.pop();
+
+        // Lines land in order, so this is always the first chunk
+        WriteChunk &chunk = _this->write_chunks.front();
+        chunk.acked += size;
+        _this->remove_chunk_from_current_burst(size);
+
+        if (chunk.acked == chunk.size)
         {
-            _this->write_ack_timestamp = -1;
-            _this->remove_chunk_from_current_burst(_this->write_ack_size);
-            _this->write_handle_req_ack();
-        }
-        else
-        {
-            _this->fsm_event.enqueue(_this->write_ack_timestamp - _this->clock.get_cycles());
+            // Acking may terminate the transfer and free it, so take a copy of what we need and
+            // make our state consistent first
+            IdmaTransfer *transfer = chunk.transfer;
+            uint8_t *data = chunk.data;
+            uint64_t chunk_size = chunk.size;
+
+            _this->write_chunks.pop_front();
+            _this->write_issue_chunk--;
+
+            _this->be->update();
+            // Keep last, it re-enters the source back-end and may terminate the transfer
+            _this->be->ack_data(transfer, data, chunk_size);
         }
     }
 
-    // If a write chunk is pending, only send a line if we are not waiting for previous line
-    // acknowledgement
-    if (_this->write_current_chunk_size > 0 && _this->write_ack_timestamp == -1)
+    if (_this->write_inflight.size() > 0)
     {
-        // Pending write chunk
+        // Come back when the oldest line in flight has landed
+        _this->fsm_event.enqueue(
+            _this->write_inflight.front().ready_timestamp - _this->clock.get_cycles());
+    }
+
+    // Send the lines of the pending chunks, one per cycle, as long as the port still has room
+    // for another outstanding access
+    if (_this->write_issue_chunk < _this->write_chunks.size()
+        && (int)_this->write_inflight.size() < _this->tcdm_outstanding
+        && (_this->last_line_timestamp == -1
+            || _this->last_line_timestamp < _this->clock.get_cycles()))
+    {
+        _this->last_line_timestamp = _this->clock.get_cycles();
         _this->write_line();
+        _this->fsm_event.enqueue();
     }
 
     if (_this->burst_queue_is_write.size() > 0 && !_this->burst_queue_is_write.front())
     {
-        // If a read burst is pending, only read new line fi previous one has been sent
-        if (_this->current_burst_size > 0 && _this->read_pending_line_size == 0)
+        _this->advance_read_issue();
+
+        // At most one line per cycle, to respect the width of the TCDM port, and only while the
+        // port still has a slot for another outstanding access
+        if (_this->read_issue_size > 0 && _this->free_read_reqs.size() > 0
+            && (_this->last_line_timestamp == -1
+                || _this->last_line_timestamp < _this->clock.get_cycles()))
         {
+            _this->last_line_timestamp = _this->clock.get_cycles();
             _this->read_line();
         }
 
-        // If a read line is stuck because backend was not ready to receive it,
-        // check if it is now ready
-        if (_this->read_pending_line_size > 0 && _this->be->is_ready_to_accept_data())
+        // Hand over at most one line per cycle, and always in issue order, since the
+        // destination backend consumes the data sequentially.
+        if (_this->read_inflight.size() > 0)
         {
-            // Maybe it was actually stuck due to latency
-            if (_this->read_pending_timestamp <= _this->clock.get_cycles())
+            IDmaBeTcdm::PendingRead line = _this->read_inflight.front();
+
+            if (_this->be->is_ready_to_accept_data(line.transfer))
             {
-                uint64_t size = _this->read_pending_line_size;
-                _this->read_pending_line_size = 0;
-                _this->remove_chunk_from_current_burst(size);
-                _this->be->write_data(_this->read_pending_line_data, size);
+                if (line.ready_timestamp <= _this->clock.get_cycles())
+                {
+                    _this->read_inflight.pop();
+                    _this->free_read_reqs.push(line.req_id);
+
+                    // State must be consistent before write_data: it re-enters us synchronously
+                    // through write_data_ack
+                    _this->remove_chunk_from_current_burst(line.size);
+                    _this->be->write_data(line.transfer, line.data, line.size);
+                }
+                else
+                {
+                    // Come back when the head of the queue has its data available
+                    _this->fsm_event.enqueue(line.ready_timestamp - _this->clock.get_cycles());
+                }
             }
-            else
-            {
-                _this->fsm_event.enqueue(_this->read_pending_timestamp - _this->clock.get_cycles());
-            }
+        }
+
+        bool more_to_send = _this->read_issue_size > 0
+            || _this->read_issue_idx < _this->burst_queue_base.size();
+
+        if ((more_to_send && _this->free_read_reqs.size() > 0)
+            || _this->read_inflight.size() > 0)
+        {
+            _this->fsm_event.enqueue();
         }
     }
 }
