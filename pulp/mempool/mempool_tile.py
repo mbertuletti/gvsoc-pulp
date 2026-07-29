@@ -35,9 +35,11 @@ class Tile(st.Component):
     def __init__(self, parent, name, parser, redmule_config: RedmuleParam=None, has_redmule: bool=False, tensorpool: bool=False, terapool: bool=False, async_l1_interco: bool=False, tile_id: int=0, sub_group_id: int=0, group_id: int=0, nb_cores_per_tile: int=4, nb_sub_groups_per_group: int=1, nb_groups: int=4, total_cores: int= 256, bank_factor: int=4, bank_size: int=1024, axi_data_width: int=64, redmule_bandwidth: int=64):
         super().__init__(parent, name)
 
-    #add new parameter has_redmule: bool=false
-        
-        if has_redmule: 
+        # A RedMulE can only be instantiated on the tensorpool configuration, which is the only
+        # one providing the dedicated wide RedMulE L1 path.
+        assert not has_redmule or tensorpool, "has_redmule requires the tensorpool configuration"
+
+        if has_redmule:
             # REDMULE
             #redmule = LightRedmule(self, 'redmule')
             redmule = LightRedmule(self, f'tile-{tile_id}-redmule',
