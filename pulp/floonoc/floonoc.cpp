@@ -134,7 +134,8 @@ void FlooNoc::handle_request_end(vp::IoReq *req)
     {
         vp::IoReq * parent = *(vp::IoReq **)req->arg_get(FlooNoc::REQ_PARENT);
         process_collective_operations(parent, req);
-        delete req->get_data();
+        // Allocated with new uint8_t[] in Router::collective_generate
+        delete[] req->get_data();
         delete req;
         parent->set_int(FlooNoc::REQ_PEND_KIDS, parent->get_int(FlooNoc::REQ_PEND_KIDS) - 1);
         if (parent->get_int(FlooNoc::REQ_PEND_KIDS) <= 0)

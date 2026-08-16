@@ -196,9 +196,10 @@ void NetworkInterface::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
         *req->arg_get(FlooNoc::REQ_COL_MASK) = (void *)0;
         *req->arg_get(FlooNoc::REQ_PEND_KIDS) = (void *)0;
         *req->arg_get(FlooNoc::REQ_MOMENTUM) = (void *)FlooNoc::MOMENTUM_ZERO;
+        uint8_t collective_type = 0;
         if (_this->noc->collective)
         {
-            uint8_t collective_type = burst->get_payload()[0];
+            collective_type = burst->get_payload()[0];
             _this->trace.msg(vp::Trace::LEVEL_DEBUG, "[Collective] preload[0] of burst %d\n",collective_type);
             if (collective_type>0 && collective_type<8)
             {
@@ -207,6 +208,10 @@ void NetworkInterface::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
                 req->set_int(FlooNoc::REQ_COLL_TYPE, collective_type);
                 req->set_int(FlooNoc::REQ_ROW_MASK, row_mask);
                 req->set_int(FlooNoc::REQ_COL_MASK, col_mask);
+            }
+            else
+            {
+                collective_type = 0;
             }
         }
 
@@ -244,6 +249,23 @@ void NetworkInterface::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
             if (_this->pending_burst_size == 0)
             {
                 _this->pending_bursts.pop();
+            }
+
+            // Collectives are selected in cluster coordinates (see Router::collective_analyze), so
+            // they only ever make sense towards an interior node. An edge node (HBM / off-chip)
+            // means the collective tag is bogus, and flooding it would deliver the target-relative
+            // offset into every cluster's L1. Report it and route the request normally instead.
+            if (collective_type &&
+                (entry->x < 1 || entry->x > _this->noc->dim_x - 2 ||
+                 entry->y < 1 || entry->y > _this->noc->dim_y - 2))
+            {
+                _this->trace.force_warning(
+                    "Collective burst targets a non-cluster node, ignoring collective "
+                    "(type: %d, base: 0x%llx, size: 0x%x, destination: (%d, %d))\n",
+                    collective_type, base, size, entry->x, entry->y);
+                *req->arg_get(FlooNoc::REQ_COLL_TYPE) = (void *)0;
+                *req->arg_get(FlooNoc::REQ_ROW_MASK) = (void *)0;
+                *req->arg_get(FlooNoc::REQ_COL_MASK) = (void *)0;
             }
 
             // Store information in the request which will be needed by the routers and the target
