@@ -21,16 +21,10 @@
 #pragma once
 
 #include <vector>
-#include <list>
 #include <vp/vp.hpp>
 #include <vp/itf/io.hpp>
 #include "../idma.hpp"
 #include "idma_be.hpp"
-
-typedef struct IDmaBeAxiWriteBurstInfo {
-    uint64_t base;
-    uint64_t size;
-} IDmaBeAxiWriteBurstInfo;
 
 /**
  * @brief AXI backend
@@ -59,10 +53,10 @@ public:
     void reset(bool active) override;
 
     void update();
-    void read_burst(uint64_t base, uint64_t size) override;
-    void write_burst(uint64_t base, uint64_t size) override;
+    void read_burst(IdmaTransfer *transfer, uint64_t base, uint64_t size) override;
+    void write_burst(IdmaTransfer *transfer, uint64_t base, uint64_t size) override;
     void write_data_ack(uint8_t *data) override;
-    void write_data(uint8_t *data, uint64_t size) override;
+    void write_data(IdmaTransfer *transfer, uint8_t *data, uint64_t size) override;
     uint64_t get_burst_size(uint64_t base, uint64_t size) override;
     bool can_accept_burst() override;
     bool can_accept_data() override;
@@ -78,10 +72,10 @@ private:
     void read_handle_req_end(vp::IoReq *req);
     // Called when a write requests is finish to handle it
     void write_handle_req_end(vp::IoReq *req);
-    // Send the pending read burst to AXI 
+    // Send the pending read burst to AXI
     void send_read_burst_to_axi();
     // Enqueue a burst to pending queue. Burst will be processed in order
-    void enqueue_burst(uint64_t base, uint64_t size, bool is_write);
+    void enqueue_burst(uint64_t base, uint64_t size, bool is_write, IdmaTransfer *transfer);
 
     // Pointer to backend, used for data synchronization
     IdmaBeProducer *be;
@@ -111,14 +105,13 @@ private:
     // processed.
     std::queue<vp::IoReq *> pending_bursts;
 
-    // Queue of pending bursts for write axi transactions. This only contains write bursts. This is decoupled from pending_bursts
-    std::queue<IDmaBeAxiWriteBurstInfo> write_axi_sending_bursts;
+    std::queue<vp::IoReq *> pending_bursts_ack;
 
     // Current base of the first transfer. This is when a chunk of data to be written is received
     // to know the base where it should be written.
     uint64_t current_burst_base;
+    uint64_t current_burst_size;
 
-    // Track the orders of DMA issued requests, for dealing with OoO responses
-    std::queue<vp::IoReq *> issued_axi_burst_order_list;
-    std::list<vp::IoReq *> OoO_responses_waiting_list;
+    // Width in bytes of AXI burst.
+    int burst_size;
 };
