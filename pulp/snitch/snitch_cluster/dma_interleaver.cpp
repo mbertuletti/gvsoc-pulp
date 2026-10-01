@@ -85,6 +85,10 @@ vp::IoReqStatus DmaInterleaver::req(vp::Block *__this, vp::IoReq *req)
     uint64_t max_delay = 0;
     while (size)
     {
+        // The same request object is used for all banks: reset its latency and duration, which
+        // set_latency() cannot do since it only ever raises the latency.
+        bank_req.prepare();
+
         int bank_size = std::min(_this->bank_width - (offset & (_this->bank_width - 1)), size);
 
         int bank_id = (offset >> _this->id_shift) & _this->id_mask;
@@ -103,7 +107,6 @@ vp::IoReqStatus DmaInterleaver::req(vp::Block *__this, vp::IoReq *req)
         offset += bank_size;
         size -= bank_size;
         data += bank_size;
-        bank_req.set_latency(0); // Reset the latency because we always use the same request object
     }
     req->inc_latency(max_delay);
     _this->trace.msg(vp::Trace::LEVEL_TRACE, "Increasing latency for req %p by %ld \n", req, max_delay);
