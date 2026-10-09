@@ -26,7 +26,7 @@ import utils.loader.loader
 import gvsoc.systree
 from pulp.chips.flex_cluster.cluster_unit import ClusterUnit, ClusterArch
 from pulp.chips.flex_cluster.ctrl_registers import CtrlRegisters
-from pulp.chips.flex_cluster.flex_cluster_arch import FlexClusterArch
+from pulp.chips.flex_cluster.configs.arch_tensorpool import FlexClusterArch
 from pulp.chips.flex_cluster.flex_mesh_noc import FlexMeshNoC
 from pulp.chips.flex_cluster.hbm_ctrl import hbm_ctrl
 import memory.dramsys

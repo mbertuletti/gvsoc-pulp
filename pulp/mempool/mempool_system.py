@@ -17,6 +17,7 @@
 # Author: Yichao Zhang (ETH Zurich) (yiczhang@iis.ee.ethz.ch)
 #         Yinrong Li (ETH Zurich) (yinrli@student.ethz.ch)
 
+import os
 import memory.memory as memory
 from vp.clock_domain import Clock_domain
 import interco.router as router
@@ -70,14 +71,18 @@ class System(st.Component):
         # UART        
         uart = ns16550.Ns16550(self, 'uart')
 
+        # L1 address window seen by the DMA and the binary loader. It must cover the whole L1
+        # (8 MiB on tensorpool); smaller configurations keep the historical 4 MiB window.
+        l1_window_size = max(0x400000, total_cores * bank_factor * bank_size)
+
         # DMA
-        dma = MemPoolDma(self, 'dma', loc_base=0x0, loc_size=0x400000, tcdm_width=total_cores*bank_factor*4)
+        dma = MemPoolDma(self, 'dma', loc_base=0x0, loc_size=l1_window_size, tcdm_width=total_cores*bank_factor*4)
 
         # Binary Loader
         loader = utils.loader.loader.ElfLoader(self, 'loader', binary=binary, entry=0x80000000)
 
         #Dummy Memory
-        dummy_mem = memory.Memory(self, 'dummy_mem', atomics=True, size=0x400000)
+        dummy_mem = memory.Memory(self, 'dummy_mem', atomics=True, size=l1_window_size)
 
         # AXI Interconnect
         axi_ico = []
@@ -140,7 +145,7 @@ class System(st.Component):
         self.bind(loader, 'start', mempool_cluster, 'loader_start')
         self.bind(loader, 'entry', mempool_cluster, 'loader_entry')
         self.bind(loader, 'out', loader_router, 'input')
-        loader_router.add_mapping('dummy', base=0x00000000, remove_offset=0x00000000, size=0x400000)
+        loader_router.add_mapping('dummy', base=0x00000000, remove_offset=0x00000000, size=l1_window_size)
         loader_router.add_mapping('mem', base=0x80000000, remove_offset=0x80000000, size=0x1000000)
         loader_router.add_mapping('rom', base=0xa0000000, remove_offset=0xa0000000, size=0x1000)
         loader_router.add_mapping('csr', base=0x40000000, remove_offset=0x40000000, size=0x10000)
@@ -214,11 +219,11 @@ class TensorpoolSystem(st.Component):
         	redmule_config=redmule_config, 
         	tensorpool=True, 
         	terapool=False, 
-        	nb_redmule_tiles=32, 
+        	nb_redmule_tiles=int(os.environ.get('TENSORPOOL_REDMULE_TILES', 32)), 
         	nb_cores_per_tile=4, 
         	nb_sub_groups_per_group=4, 
         	nb_groups=4, 
-        	total_cores=512, 
+        	total_cores=int(os.environ.get('TENSORPOOL_NUM_CORES', 512)), 
         	bank_factor=8, 
         	bank_size=2048, 
         	axi_data_width=64, 
