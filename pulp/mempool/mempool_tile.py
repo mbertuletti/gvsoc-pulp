@@ -27,6 +27,7 @@ from pulp.mempool.l1_interconnect.l1_address_scrambler import L1_AddressScramble
 
 from pulp.light_redmule.light_redmule import LightRedmule
 from pulp.light_opope.light_opope import LightOpope
+from pulp.light_inner.light_inner import LightInner
 from utils.common_cells import Or
 from pulp.mempool.irq_hold import IrqHold
 from pulp.mempool.redmule_configurations import RedmuleParam
@@ -48,10 +49,18 @@ class Tile(st.Component):
                                     p                   = redmule_config.opope_p,
                                     elem_size           = 2,
                                     mac_latency         = redmule_config.opope_mac_latency,
-                                    input_slots         = redmule_config.opope_input_slots,
-                                    stream_loads        = redmule_config.stream_loads,
-                                    prefetch_depth      = redmule_config.opope_prefetch_depth,
                                     queue_depth         = redmule_config.queue_depth
+                                    )
+        elif has_redmule and redmule_config.engine == 'inner':
+            # Weight-stationary inner-product engine, in place of RedMulE (same ports)
+            redmule = LightInner(self, f'tile-{tile_id}-redmule',
+                                    tcdm_bank_width     = 4,
+                                    tcdm_bank_number    = redmule_config.tcdm_bank_number,
+                                    p                   = redmule_config.inner_p,
+                                    elem_size           = 2,
+                                    mac_latency         = redmule_config.inner_mac_latency,
+                                    queue_depth         = redmule_config.queue_depth,
+                                    weight_buffers      = redmule_config.inner_weight_buffers
                                     )
         elif has_redmule:
             # REDMULE
@@ -64,8 +73,7 @@ class Tile(st.Component):
                                     ce_width            = redmule_config.redmule_width,
                                     ce_pipe             = redmule_config.redmule_regs,
                                     queue_depth         = redmule_config.queue_depth,
-                                    stream_loads        = redmule_config.stream_loads,
-                                    row_refill_cyc      = redmule_config.row_refill_cyc
+                                    stream_loads        = redmule_config.stream_loads
                                     )
 
         [args, __] = parser.parse_known_args()

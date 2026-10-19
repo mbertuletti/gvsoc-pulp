@@ -54,11 +54,9 @@ class FlexClusterArch:
         self.redmule_height = int(os.environ.get('REDMULE_HEIGHT', 8))
         self.redmule_width = int(os.environ.get('REDMULE_WIDTH', 32))
         self.redmule_regs = 3
-        self.redmule_queue_depth = 128
+        # Request queue entries (TE_QUEUE_DEPTH, as the single-cluster model)
+        self.redmule_queue_depth = int(os.environ.get('TE_QUEUE_DEPTH', 128))
         self.redmule_stream_loads = True
-        # Per-M-block refill: 740 cycles calibrated at height 8, scaled with
-        # the rows of one block
-        self.redmule_row_refill_cyc = 740 * self.redmule_height // 8
         # auto-derive: (height*(regs+1))//2
         self.redmule_tcdm_bank_number = None
 
