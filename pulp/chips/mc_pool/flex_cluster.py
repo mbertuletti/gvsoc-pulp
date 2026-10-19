@@ -130,7 +130,6 @@ class FlexClusterSystem(gvsoc.systree.Component):
                                         redmule_regs            =   arch.redmule_regs,
                                         redmule_queue_depth     =   arch.redmule_queue_depth,
                                         redmule_stream_loads    =   arch.redmule_stream_loads,
-                                        redmule_row_refill_cyc  =   arch.redmule_row_refill_cyc,
                                         redmule_tcdm_bank_number=   arch.redmule_tcdm_bank_number,
                                         nb_cores_per_tile       =   arch.nb_cores_per_tile,
                                         nb_sub_groups_per_group =   arch.nb_sub_groups_per_group,
