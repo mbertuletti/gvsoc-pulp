@@ -20,13 +20,13 @@ import gvsoc.systree
 import interco.router as router
 from interco.interleaver import Interleaver
 import memory.memory as memory
-from pulp.chips.mc_pool.mempool_dma.flex_mempool_dma import FlexMemPoolDma
+from pulp.chips.mc_pool.common.mc_pool_dma import McPoolDma
 from elftools.elf.elffile import *
 from pulp.mempool.mempool_cluster import Cluster
 from pulp.mempool.redmule_configurations import RedmuleParam
 from pulp.mempool.l2_subsystem import L2_subsystem
-from pulp.chips.mc_pool.cluster_registers import ClusterRegisters
-from pulp.chips.mc_pool.util_dumpper import UtilDumpper
+from pulp.chips.mc_pool.common.cluster_csr import ClusterCSR
+from pulp.chips.mc_pool.common.util_dumpper import UtilDumpper
 
 import gvsoc.runner
 import math
@@ -88,7 +88,6 @@ class ClusterArch:
                         nb_groups,
                         bank_factor,
                         axi_data_width,
-                        dma_tcdm_outstanding,
                         dma_burst_queue_size,
                         nb_axi_masters_per_group,
                         nb_l2_banks,
@@ -128,7 +127,6 @@ class ClusterArch:
         self.bank_factor                = bank_factor
         self.bank_size                  = bank_size
         self.axi_data_width             = axi_data_width
-        self.dma_tcdm_outstanding       = dma_tcdm_outstanding
         self.dma_burst_queue_size       = dma_burst_queue_size
         self.nb_axi_masters_per_group   = nb_axi_masters_per_group
         self.nb_l2_banks                = nb_l2_banks
@@ -190,12 +188,13 @@ class ClusterUnit(gvsoc.systree.Component):
         stack_mem = memory.Memory(self, 'stack_mem', size=arch.stack_area.size)
 
         # Cluster CSRs (extended with inter-cluster barrier config)
-        cluster_regs = ClusterRegisters(self, 'ctrl_registers',
+        cluster_csr = ClusterCSR(self, 'cluster_csr',
             wakeup_latency=18 if arch.nb_sub_groups_per_group > 1 else 15,
             cluster_id=arch.cluster_id,
             num_cluster_x=arch.num_cluster_x,
             num_cluster_y=arch.num_cluster_y,
             global_barrier_addr=arch.sync_area.base+arch.sync_itlv,
+            global_barrier_stride=arch.sync_area.size,
             soc_register_base=arch.soc_register_base)
 
         # Data Dumpper
@@ -206,8 +205,7 @@ class ClusterUnit(gvsoc.systree.Component):
         data_dumpper_input_size = arch.tcdm_size
 
         # DMA
-        dma = FlexMemPoolDma(self, 'dma', loc_base=arch.base, loc_size=arch.tcdm_size + data_dumpper_input_size, tcdm_width=arch.axi_data_width,
-                             tcdm_outstanding=arch.dma_tcdm_outstanding,
+        dma = McPoolDma(self, 'dma', loc_base=arch.base, loc_size=arch.tcdm_size + data_dumpper_input_size, tcdm_width=arch.axi_data_width,
                              burst_queue_size=arch.dma_burst_queue_size)
 
         # Binary Loader
@@ -254,7 +252,7 @@ class ClusterUnit(gvsoc.systree.Component):
         for i in range(0, nb_axi_masters):
             self.bind(axi_ico[i], 'soc', narrow_axi, 'input')
 
-        # FlexCluster virtual router interconnect
+        # Cluster virtual router interconnect
         self.o_NARROW_INPUT(narrow_axi.i_INPUT())
         # Forward SoC control register window (e.g. EOC) to the narrow SoC path.
         narrow_axi.o_MAP(self.i_NARROW_SOC())
@@ -273,10 +271,10 @@ class ClusterUnit(gvsoc.systree.Component):
             self.bind(axi_ico[i], 'l2', l2_mem, 'input_%d' % i)
 
         # CSR Mempool regs (0x40000000) 
-        self.bind(narrow_axi, 'csr_mempool_regs', cluster_regs, 'input')
+        self.bind(narrow_axi, 'csr_mempool_regs', cluster_csr, 'input')
 
         # Barrier config registers (0x20000000) mapping
-        self.bind(narrow_axi, 'csr_barrier_regs', cluster_regs, 'barrier_reg_input')
+        self.bind(narrow_axi, 'csr_barrier_regs', cluster_csr, 'barrier_reg_input')
 
         # DMA Ctrl
         self.bind(narrow_axi, 'dma_ctrl', dma, 'input')
@@ -287,9 +285,9 @@ class ClusterUnit(gvsoc.systree.Component):
         # Binary loader
         loader.o_OUT(instr_router.i_INPUT())
         self.bind(loader, 'entry', mempool_cluster, 'loader_entry')
-        loader.o_START(cluster_regs.i_INST_PREHEAT_DONE())
-        self.bind(cluster_regs, 'fetch_start', mempool_cluster, 'loader_start')   
-        self.o_HBM_PRELOAD_DONE(cluster_regs.i_HBM_PRELOAD_DONE())
+        loader.o_START(cluster_csr.i_INST_PREHEAT_DONE())
+        self.bind(cluster_csr, 'fetch_start', mempool_cluster, 'loader_start')   
+        self.o_HBM_PRELOAD_DONE(cluster_csr.i_HBM_PRELOAD_DONE())
 
         #loader router
         instr_router.o_MAP(narrow_axi.i_INPUT())
@@ -297,11 +295,11 @@ class ClusterUnit(gvsoc.systree.Component):
         self.bind(instr_router, 'mem', l2_mem, 'input_loader')
 
         #L2 ro-cache configuration
-        self.bind(cluster_regs, 'rocache_cfg', mempool_cluster, 'rocache_cfg')
+        self.bind(cluster_csr, 'rocache_cfg', mempool_cluster, 'rocache_cfg')
 
         # Mempool EOC MMIO notification path:
-        # cluster_regs -> narrow_axi -> narrow_soc -> virtual_interco.
-        self.bind(cluster_regs, 'cluster_eoc', narrow_axi, 'input')
+        # cluster_csr -> narrow_axi -> narrow_soc -> virtual_interco.
+        self.bind(cluster_csr, 'cluster_eoc', narrow_axi, 'input')
 
         #DMA data
         # The TCDM accesses of the DMA and of remote clusters are split over the DMA ports of the
@@ -340,9 +338,9 @@ class ClusterUnit(gvsoc.systree.Component):
         ## SYNC BUS   ##
         ################
 
-        #Cluster Registers for synchronization barrier
+        #Cluster CSRs for synchronization barrier
         for i in range(0, arch.total_cores):
-            self.bind(cluster_regs, f'barrier_ack', mempool_cluster, f'barrier_ack_{i}')
+            self.bind(cluster_csr, f'barrier_ack', mempool_cluster, f'barrier_ack_{i}')
 
         # Sync memory for barrier counters (atomics-capable)
         sync_mem = memory.Memory(self, 'sync_mem', size=arch.sync_itlv, atomics=True, width_log2=2)
@@ -352,8 +350,8 @@ class ClusterUnit(gvsoc.systree.Component):
         sync_router_master.o_MAP(self.i_SYNC_OUTPUT())
         narrow_axi.o_MAP(sync_router_master.i_INPUT(), base=arch.sync_area.base, size=arch.sync_area.size*arch.num_cluster_x*arch.num_cluster_y, rm_base=False)
 
-        # cluster_regs global_barrier_master -> sync_router_master (outgoing wakeup)
-        cluster_regs.o_GLOBAL_BARRIER_MASTER(sync_router_master.i_INPUT())
+        # cluster_csr global_barrier_master -> sync_router_master (outgoing wakeup)
+        cluster_csr.o_GLOBAL_BARRIER_MASTER(sync_router_master.i_INPUT())
 
         # Incoming: SYNC_INPUT -> sync_router_slave -> sync_mem / global_barrier_slave
         sync_router_slave = router.Router(self, 'sync_router_slave', bandwidth=4)
@@ -361,8 +359,8 @@ class ClusterUnit(gvsoc.systree.Component):
         sync_router_slave.add_mapping('sync_mem')
         self.bind(sync_router_slave, f'sync_mem', sync_mem, f'input')
 
-        # sync_router_slave -> cluster_regs global_barrier_slave (incoming wakeup)
-        sync_router_slave.o_MAP(cluster_regs.i_GLOBAL_BARRIER_SLAVE(), base=arch.sync_itlv, size=arch.sync_special_mem, rm_base=True)
+        # sync_router_slave -> cluster_csr global_barrier_slave (incoming wakeup)
+        sync_router_slave.o_MAP(cluster_csr.i_GLOBAL_BARRIER_SLAVE(), base=arch.sync_itlv, size=arch.sync_special_mem, rm_base=True)
 
     def i_WIDE_INPUT(self) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, 'wide_input', signature='io')
