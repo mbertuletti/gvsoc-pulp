@@ -59,6 +59,10 @@ class McPoolArchBase:
         self.cluster_stack_base      = 0x10000000
         self.cluster_stack_size      = 0x00020000
 
+        # TCDM accesses of the cluster DMA which can be in flight at the same
+        # time: 1 exposes the full latency of every line
+        self.dma_tcdm_outstanding    = 1
+
         self.cluster_reg_base        = 0x20000000
         self.cluster_reg_size        = 0x00000200
 
@@ -131,6 +135,7 @@ class McPoolArchTensorPool(McPoolArchBase):
             self.num_core_per_cluster * self.bank_factor)
         self.axi_data_width          = 64
         self.dma_burst_queue_size    = 32
+        self.dma_tcdm_outstanding    = 32
         self.nb_axi_masters_per_group = 4
         self.instruction_mem_size    = 0x400000
         self.nb_l2_banks             = 4

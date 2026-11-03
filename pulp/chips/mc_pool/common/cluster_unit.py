@@ -89,6 +89,7 @@ class ClusterArch:
                         bank_factor,
                         axi_data_width,
                         dma_burst_queue_size,
+                        dma_tcdm_outstanding,
                         nb_axi_masters_per_group,
                         nb_l2_banks,
                         sync_base,
@@ -129,6 +130,7 @@ class ClusterArch:
         self.bank_size                  = bank_size
         self.axi_data_width             = axi_data_width
         self.dma_burst_queue_size       = dma_burst_queue_size
+        self.dma_tcdm_outstanding       = dma_tcdm_outstanding
         self.nb_axi_masters_per_group   = nb_axi_masters_per_group
         self.nb_l2_banks                = nb_l2_banks
         self.remote_group_latency       = remote_group_latency
@@ -209,7 +211,8 @@ class ClusterUnit(gvsoc.systree.Component):
 
         # DMA
         dma = McPoolDma(self, 'dma', loc_base=arch.base, loc_size=arch.tcdm_size + data_dumpper_input_size, tcdm_width=arch.axi_data_width,
-                             burst_queue_size=arch.dma_burst_queue_size)
+                             burst_queue_size=arch.dma_burst_queue_size,
+                             tcdm_outstanding=arch.dma_tcdm_outstanding)
 
         # Binary Loader
         loader = utils.loader.loader.ElfLoader(self, 'loader', binary=binary, entry=arch.insn_area.base)

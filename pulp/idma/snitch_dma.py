@@ -38,6 +38,9 @@ class SnitchDma(gvsoc.systree.Component):
         Size of the local area.
     tcdm_width: int
         Width of the local interconnect, in bytes.
+    tcdm_outstanding: int
+        Number of TCDM accesses which can be in flight at the same time. 1 gives the original
+        blocking behaviour, where each line's latency is fully exposed.
     """
 
     def __init__(self, parent: gvsoc.systree.Component, name: str,
@@ -46,7 +49,8 @@ class SnitchDma(gvsoc.systree.Component):
             burst_size: int=0,
             loc_base: int=0,
             loc_size: int=0,
-            tcdm_width: int=0):
+            tcdm_width: int=0,
+            tcdm_outstanding: int=1):
 
         super().__init__(parent, name)
 
@@ -66,6 +70,7 @@ class SnitchDma(gvsoc.systree.Component):
             "loc_base": loc_base,
             "loc_size": loc_size,
             "tcdm_width": tcdm_width,
+            "tcdm_outstanding": tcdm_outstanding,
         })
 
     def i_OFFLOAD(self) -> gvsoc.systree.SlaveItf:
